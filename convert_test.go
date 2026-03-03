@@ -10,16 +10,16 @@ import (
 
 // mockClient implements MattermostClient with function fields for per-test overrides.
 type mockClient struct {
-	getUserByUsernameFn            func(username string) (*model.User, error)
-	demoteUserToGuestFn            func(userID string) error
-	getTeamByNameFn                func(name string) (*model.Team, error)
-	getChannelByNameFn             func(channelName, teamID string) (*model.Channel, error)
-	getChannelMemberFn             func(channelID, userID string) (*model.ChannelMember, error)
-	addChannelMemberFn             func(channelID, userID string) (*model.ChannelMember, error)
+	getUserByUsernameFn             func(username string) (*model.User, error)
+	demoteUserToGuestFn             func(userID string) error
+	getTeamByNameFn                 func(name string) (*model.Team, error)
+	getChannelByNameFn              func(channelName, teamID string) (*model.Channel, error)
+	getChannelMemberFn              func(channelID, userID string) (*model.ChannelMember, error)
+	addChannelMemberFn              func(channelID, userID string) (*model.ChannelMember, error)
 	getChannelMembersWithTeamDataFn func(userID string, page, perPage int) ([]model.ChannelMemberWithTeamData, error)
-	removeUserFromChannelFn        func(channelID, userID string) error
-	getChannelFn                   func(channelID string) (*model.Channel, error)
-	getConfigFn                    func() (*model.Config, error)
+	removeUserFromChannelFn         func(channelID, userID string) error
+	getChannelFn                    func(channelID string) (*model.Channel, error)
+	getConfigFn                     func() (*model.Config, error)
 }
 
 func (m *mockClient) GetUserByUsername(username string) (*model.User, error) {
@@ -200,11 +200,11 @@ func defaultMock() *mockClient {
 func defaultConfig() ConvertConfig {
 	return ConvertConfig{
 		TargetUsername: "jsmith",
-		TeamName:      "acme-corp",
-		ChannelName:   "project-alpha",
-		DryRun:        false,
-		Workers:       5,
-		Verbose:       false,
+		TeamName:       "acme-corp",
+		ChannelName:    "project-alpha",
+		DryRun:         false,
+		Workers:        5,
+		Verbose:        false,
 	}
 }
 
