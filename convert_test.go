@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -19,6 +20,8 @@ type mockClient struct {
 	getChannelMembersWithTeamDataFn func(userID string, page, perPage int) ([]model.ChannelMemberWithTeamData, error)
 	removeUserFromChannelFn         func(channelID, userID string) error
 	getChannelFn                    func(channelID string) (*model.Channel, error)
+	getTeamsForUserFn               func(userID string) ([]*model.Team, error)
+	removeUserFromTeamFn            func(teamID, userID string) error
 	getConfigFn                     func() (*model.Config, error)
 }
 
@@ -83,6 +86,20 @@ func (m *mockClient) GetChannel(channelID string) (*model.Channel, error) {
 		return m.getChannelFn(channelID)
 	}
 	panic("mockClient.GetChannel called but not configured")
+}
+
+func (m *mockClient) GetTeamsForUser(userID string) ([]*model.Team, error) {
+	if m.getTeamsForUserFn != nil {
+		return m.getTeamsForUserFn(userID)
+	}
+	panic("mockClient.GetTeamsForUser called but not configured")
+}
+
+func (m *mockClient) RemoveUserFromTeam(teamID, userID string) error {
+	if m.removeUserFromTeamFn != nil {
+		return m.removeUserFromTeamFn(teamID, userID)
+	}
+	panic("mockClient.RemoveUserFromTeam called but not configured")
 }
 
 func (m *mockClient) GetConfig() (*model.Config, error) {
@@ -924,5 +941,357 @@ func TestDisplayName(t *testing.T) {
 				t.Errorf("displayName() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// --- Restrict-to-team tests ---
+
+func restrictToTeamMock() *mockClient {
+	mock := defaultMock()
+	mock.getTeamsForUserFn = func(userID string) ([]*model.Team, error) {
+		return []*model.Team{
+			{Id: "team-id-001", Name: "acme-corp", DeleteAt: 0},
+			{Id: "team-id-002", Name: "acme-sales", DeleteAt: 0},
+			{Id: "team-id-003", Name: "acme-marketing", DeleteAt: 0},
+		}, nil
+	}
+	mock.removeUserFromTeamFn = func(teamID, userID string) error {
+		return nil
+	}
+	return mock
+}
+
+func restrictToTeamConfig() ConvertConfig {
+	return ConvertConfig{
+		TargetUsername: "jsmith",
+		TeamName:       "acme-corp",
+		ChannelName:    "project-alpha",
+		RestrictToTeam: true,
+		DryRun:         false,
+		Workers:        5,
+		Verbose:        false,
+	}
+}
+
+func TestRunConversion_RestrictToTeam_HappyPath(t *testing.T) {
+	mock := restrictToTeamMock()
+	cfg := restrictToTeamConfig()
+
+	var mu sync.Mutex
+	removedTeams := make(map[string]bool)
+	mock.removeUserFromTeamFn = func(teamID, userID string) error {
+		mu.Lock()
+		removedTeams[teamID] = true
+		mu.Unlock()
+		return nil
+	}
+
+	removedChannels := make(map[string]bool)
+	mock.removeUserFromChannelFn = func(channelID, userID string) error {
+		mu.Lock()
+		removedChannels[channelID] = true
+		mu.Unlock()
+		return nil
+	}
+
+	result, err := RunConversion(mock, cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !result.RestrictToTeam {
+		t.Error("expected RestrictToTeam=true")
+	}
+	if result.TotalTeams != 3 {
+		t.Errorf("expected 3 total teams, got %d", result.TotalTeams)
+	}
+	if result.TeamsRemovedCount != 2 {
+		t.Errorf("expected 2 teams removed, got %d", result.TeamsRemovedCount)
+	}
+	if result.TeamsRetained != 1 {
+		t.Errorf("expected 1 team retained, got %d", result.TeamsRetained)
+	}
+	if result.TeamRemovalErrors != 0 {
+		t.Errorf("expected 0 team removal errors, got %d", result.TeamRemovalErrors)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	// acme-sales and acme-marketing should be removed
+	if !removedTeams["team-id-002"] {
+		t.Error("expected team acme-sales to be removed")
+	}
+	if !removedTeams["team-id-003"] {
+		t.Error("expected team acme-marketing to be removed")
+	}
+	if removedTeams["team-id-001"] {
+		t.Error("target team acme-corp should NOT be removed")
+	}
+	// Channel removal should also happen (town-square and off-topic)
+	if result.ChannelsRemoved != 2 {
+		t.Errorf("expected 2 channels removed, got %d", result.ChannelsRemoved)
+	}
+}
+
+func TestRunConversion_RestrictToTeam_OnlyTargetTeam(t *testing.T) {
+	mock := restrictToTeamMock()
+	mock.getTeamsForUserFn = func(userID string) ([]*model.Team, error) {
+		return []*model.Team{
+			{Id: "team-id-001", Name: "acme-corp", DeleteAt: 0},
+		}, nil
+	}
+
+	teamRemoveCalled := false
+	mock.removeUserFromTeamFn = func(teamID, userID string) error {
+		teamRemoveCalled = true
+		return nil
+	}
+
+	cfg := restrictToTeamConfig()
+	result, err := RunConversion(mock, cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if teamRemoveCalled {
+		t.Error("RemoveUserFromTeam should not be called when user is only in the target team")
+	}
+	if result.TeamsRemovedCount != 0 {
+		t.Errorf("expected 0 teams removed, got %d", result.TeamsRemovedCount)
+	}
+	if result.TeamsRetained != 1 {
+		t.Errorf("expected 1 team retained, got %d", result.TeamsRetained)
+	}
+}
+
+func TestRunConversion_RestrictToTeam_DryRun(t *testing.T) {
+	mock := restrictToTeamMock()
+
+	demoteCalled := false
+	mock.demoteUserToGuestFn = func(userID string) error {
+		demoteCalled = true
+		return nil
+	}
+
+	teamRemoveCalled := false
+	mock.removeUserFromTeamFn = func(teamID, userID string) error {
+		teamRemoveCalled = true
+		return nil
+	}
+
+	channelRemoveCalled := false
+	mock.removeUserFromChannelFn = func(channelID, userID string) error {
+		channelRemoveCalled = true
+		return nil
+	}
+
+	addCalled := false
+	mock.addChannelMemberFn = func(channelID, userID string) (*model.ChannelMember, error) {
+		addCalled = true
+		return nil, nil
+	}
+
+	// Make user not in channel to test add is also skipped
+	mock.getChannelMemberFn = func(channelID, userID string) (*model.ChannelMember, error) {
+		return nil, configError("not found")
+	}
+
+	cfg := restrictToTeamConfig()
+	cfg.DryRun = true
+
+	result, err := RunConversion(mock, cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if demoteCalled {
+		t.Error("DemoteUserToGuest must NOT be called in dry-run mode")
+	}
+	if teamRemoveCalled {
+		t.Error("RemoveUserFromTeam must NOT be called in dry-run mode")
+	}
+	if channelRemoveCalled {
+		t.Error("RemoveUserFromChannel must NOT be called in dry-run mode")
+	}
+	if addCalled {
+		t.Error("AddChannelMember must NOT be called in dry-run mode")
+	}
+	if !result.DryRun {
+		t.Error("expected DryRun=true in result")
+	}
+	if result.TeamsRemovedCount != 2 {
+		t.Errorf("expected 2 teams would be removed, got %d", result.TeamsRemovedCount)
+	}
+}
+
+func TestRunConversion_RestrictToTeam_PartialFailure_Team(t *testing.T) {
+	mock := restrictToTeamMock()
+	mock.removeUserFromTeamFn = func(teamID, userID string) error {
+		if teamID == "team-id-002" {
+			return apiError("removal failed", fmt.Errorf("server error"))
+		}
+		return nil
+	}
+
+	cfg := restrictToTeamConfig()
+	result, err := RunConversion(mock, cfg)
+
+	exitErr, ok := err.(*ExitError)
+	if !ok {
+		t.Fatalf("expected *ExitError, got %T (%v)", err, err)
+	}
+	if exitErr.Code != ExitPartialFailure {
+		t.Errorf("expected exit code %d, got %d", ExitPartialFailure, exitErr.Code)
+	}
+	if result.TeamRemovalErrors != 1 {
+		t.Errorf("expected 1 team removal error, got %d", result.TeamRemovalErrors)
+	}
+	if result.TeamsRemovedCount != 1 {
+		t.Errorf("expected 1 team removed, got %d", result.TeamsRemovedCount)
+	}
+	if len(result.TeamErrors) != 1 {
+		t.Errorf("expected 1 team error entry, got %d", len(result.TeamErrors))
+	}
+}
+
+func TestRunConversion_RestrictToTeam_ChannelEnumerationAfterTeamRemoval(t *testing.T) {
+	mock := restrictToTeamMock()
+	cfg := restrictToTeamConfig()
+
+	// Track call ordering — team removals are concurrent so we track phases not individual calls
+	var mu sync.Mutex
+	var callSequence []string
+	mock.removeUserFromTeamFn = func(teamID, userID string) error {
+		mu.Lock()
+		callSequence = append(callSequence, "remove-team:"+teamID)
+		mu.Unlock()
+		return nil
+	}
+	mock.getChannelMembersWithTeamDataFn = func(userID string, page, perPage int) ([]model.ChannelMemberWithTeamData, error) {
+		mu.Lock()
+		callSequence = append(callSequence, fmt.Sprintf("enumerate-channels:page%d", page))
+		mu.Unlock()
+		if page > 0 {
+			return []model.ChannelMemberWithTeamData{}, nil
+		}
+		return []model.ChannelMemberWithTeamData{
+			memberWithTeamData("ch-target", "acme-corp"),
+			memberWithTeamData("ch-town-square", "acme-corp"),
+		}, nil
+	}
+
+	result, err := RunConversion(mock, cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	mu.Lock()
+	seq := make([]string, len(callSequence))
+	copy(seq, callSequence)
+	mu.Unlock()
+
+	// Verify team removals happen before channel enumeration
+	teamRemovalsSeen := 0
+	channelEnumSeen := false
+	for _, call := range seq {
+		if strings.HasPrefix(call, "remove-team:") {
+			if channelEnumSeen {
+				t.Errorf("team removal happened after channel enumeration: %v", seq)
+				break
+			}
+			teamRemovalsSeen++
+		}
+		if strings.HasPrefix(call, "enumerate-channels:") {
+			channelEnumSeen = true
+		}
+	}
+	if teamRemovalsSeen != 2 {
+		t.Errorf("expected 2 team removals before channel enumeration, got %d", teamRemovalsSeen)
+	}
+	if result.ChannelsRemoved != 1 {
+		t.Errorf("expected 1 channel removed, got %d", result.ChannelsRemoved)
+	}
+}
+
+func TestRunConversion_RestrictToTeam_LargeTeamList(t *testing.T) {
+	mock := restrictToTeamMock()
+
+	// 50 teams: target + 49 others
+	teams := make([]*model.Team, 50)
+	teams[0] = &model.Team{Id: "team-id-001", Name: "acme-corp", DeleteAt: 0}
+	for i := 1; i < 50; i++ {
+		teams[i] = &model.Team{Id: fmt.Sprintf("team-id-%03d", i+1), Name: fmt.Sprintf("team-%03d", i), DeleteAt: 0}
+	}
+	mock.getTeamsForUserFn = func(userID string) ([]*model.Team, error) {
+		return teams, nil
+	}
+
+	var mu sync.Mutex
+	removedCount := 0
+	mock.removeUserFromTeamFn = func(teamID, userID string) error {
+		mu.Lock()
+		removedCount++
+		mu.Unlock()
+		return nil
+	}
+
+	cfg := restrictToTeamConfig()
+	result, err := RunConversion(mock, cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.TotalTeams != 50 {
+		t.Errorf("expected 50 total teams, got %d", result.TotalTeams)
+	}
+	if result.TeamsRemovedCount != 49 {
+		t.Errorf("expected 49 teams removed, got %d", result.TeamsRemovedCount)
+	}
+	mu.Lock()
+	if removedCount != 49 {
+		t.Errorf("expected 49 RemoveUserFromTeam calls, got %d", removedCount)
+	}
+	mu.Unlock()
+}
+
+func TestRunConversion_RestrictToTeam_ArchivedTeamsFiltered(t *testing.T) {
+	mock := restrictToTeamMock()
+	mock.getTeamsForUserFn = func(userID string) ([]*model.Team, error) {
+		return []*model.Team{
+			{Id: "team-id-001", Name: "acme-corp", DeleteAt: 0},
+			{Id: "team-id-002", Name: "acme-sales", DeleteAt: 0},
+			{Id: "team-id-004", Name: "archived-team", DeleteAt: 1609459200000}, // archived
+		}, nil
+	}
+
+	var mu sync.Mutex
+	removedTeams := make(map[string]bool)
+	mock.removeUserFromTeamFn = func(teamID, userID string) error {
+		mu.Lock()
+		removedTeams[teamID] = true
+		mu.Unlock()
+		return nil
+	}
+
+	cfg := restrictToTeamConfig()
+	result, err := RunConversion(mock, cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Only 2 active teams (archived is filtered)
+	if result.TotalTeams != 2 {
+		t.Errorf("expected 2 total active teams, got %d", result.TotalTeams)
+	}
+	if result.TeamsRemovedCount != 1 {
+		t.Errorf("expected 1 team removed, got %d", result.TeamsRemovedCount)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if removedTeams["team-id-004"] {
+		t.Error("archived team should NOT be removed")
+	}
+	if !removedTeams["team-id-002"] {
+		t.Error("expected acme-sales to be removed")
 	}
 }

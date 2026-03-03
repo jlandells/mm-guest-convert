@@ -329,3 +329,229 @@ func TestWriteFormatted_InvalidFormat(t *testing.T) {
 		t.Error("expected table output for unknown format")
 	}
 }
+
+// --- Restrict-to-team output tests ---
+
+func sampleRestrictResult() *ConvertResult {
+	return &ConvertResult{
+		DryRun:         false,
+		RestrictToTeam: true,
+		User: UserInfo{
+			ID:          "user-id-001",
+			Username:    "jsmith",
+			DisplayName: "John Smith",
+			CurrentRole: "member",
+		},
+		TargetTeam:        "acme-corp",
+		TargetChannel:     "project-alpha",
+		WasAlreadyGuest:   false,
+		WasAlreadyMember:  true,
+		TotalTeams:        3,
+		TeamsRemovedCount: 2,
+		TeamsRetained:     1,
+		TeamRemovalErrors: 0,
+		TeamActions: []TeamAction{
+			{TeamName: "acme-corp", TeamID: "team-id-001", Action: "retained", Status: "ok"},
+			{TeamName: "acme-sales", TeamID: "team-id-002", Action: "removed", Status: "ok"},
+			{TeamName: "acme-marketing", TeamID: "team-id-003", Action: "removed", Status: "ok"},
+		},
+		TeamErrors:       []TeamAction{},
+		TotalMemberships: 3,
+		ChannelsRemoved:  1,
+		ChannelsRetained: 1,
+		ChannelsSkipped:  1,
+		RemovalErrors:    0,
+		Actions: []ChannelAction{
+			{TeamName: "acme-corp", ChannelName: "project-alpha", ChannelID: "ch-target", Action: "retained", Status: "ok"},
+			{TeamName: "acme-corp", ChannelName: "town-square", ChannelID: "ch-ts", Action: "removed", Status: "ok"},
+		},
+		Errors: []ChannelAction{},
+	}
+}
+
+func TestWriteTable_RestrictToTeam(t *testing.T) {
+	var buf bytes.Buffer
+	result := sampleRestrictResult()
+	code := writeTable(&buf, result, "v1.0.0")
+
+	if code != ExitSuccess {
+		t.Errorf("expected exit code %d, got %d", ExitSuccess, code)
+	}
+
+	output := buf.String()
+
+	checks := []string{
+		"Step 1/8",
+		"Step 2/8",
+		"Step 3/8",
+		"Step 4/8",
+		"Step 5/8",
+		"Step 6/8",
+		"Step 7/8",
+		"Step 8/8",
+		"Removed from team: acme-sales",
+		"Removed from team: acme-marketing",
+		"Removed from #town-square",
+		"1 team retained",
+		"2 teams removed",
+		"1 channel retained",
+		"1 channels removed",
+	}
+	for _, check := range checks {
+		if !strings.Contains(output, check) {
+			t.Errorf("restrict-to-team table output missing %q\nFull output:\n%s", check, output)
+		}
+	}
+
+	// Should NOT contain 6-step labels
+	if strings.Contains(output, "Step 1/6") {
+		t.Error("restrict-to-team should use /8 step labels, not /6")
+	}
+}
+
+func TestWriteTable_RestrictToTeam_DryRun(t *testing.T) {
+	var buf bytes.Buffer
+	result := sampleRestrictResult()
+	result.DryRun = true
+	writeTable(&buf, result, "v1.0.0")
+
+	output := buf.String()
+	if !strings.Contains(output, "DRY RUN") {
+		t.Error("dry-run restrict-to-team table should contain DRY RUN header")
+	}
+	if !strings.Contains(output, "Would remove from team:") {
+		t.Error("dry-run should show 'Would remove from team:' labels")
+	}
+}
+
+func TestWriteCSV_RestrictToTeam(t *testing.T) {
+	var buf bytes.Buffer
+	result := sampleRestrictResult()
+	code := writeCSV(&buf, result)
+
+	if code != ExitSuccess {
+		t.Errorf("expected exit code %d, got %d", ExitSuccess, code)
+	}
+
+	reader := csv.NewReader(&buf)
+	records, err := reader.ReadAll()
+	if err != nil {
+		t.Fatalf("failed to parse CSV output: %v", err)
+	}
+
+	// Header + 3 team rows + 2 channel rows = 6
+	if len(records) != 6 {
+		t.Fatalf("expected 6 CSV records (1 header + 3 team + 2 channel), got %d", len(records))
+	}
+
+	// Team rows come first (after header)
+	if records[1][3] != "team-retained" {
+		t.Errorf("first team row action = %q, want 'team-retained'", records[1][3])
+	}
+	if records[1][2] != "" {
+		t.Errorf("team row channel_name should be empty, got %q", records[1][2])
+	}
+	if records[2][3] != "team-removed" {
+		t.Errorf("second team row action = %q, want 'team-removed'", records[2][3])
+	}
+	if records[3][3] != "team-removed" {
+		t.Errorf("third team row action = %q, want 'team-removed'", records[3][3])
+	}
+
+	// Channel rows after
+	if records[4][3] != "retained" {
+		t.Errorf("first channel row action = %q, want 'retained'", records[4][3])
+	}
+	if records[5][3] != "removed" {
+		t.Errorf("second channel row action = %q, want 'removed'", records[5][3])
+	}
+}
+
+func TestWriteJSON_RestrictToTeam(t *testing.T) {
+	var buf bytes.Buffer
+	result := sampleRestrictResult()
+	code := writeJSON(&buf, result)
+
+	if code != ExitSuccess {
+		t.Errorf("expected exit code %d, got %d", ExitSuccess, code)
+	}
+
+	var out jsonOutput
+	if err := json.Unmarshal(buf.Bytes(), &out); err != nil {
+		t.Fatalf("failed to parse JSON output: %v", err)
+	}
+
+	if !out.RestrictToTeam {
+		t.Error("expected restrict_to_team=true")
+	}
+	if out.TeamsRemoved == nil {
+		t.Fatal("expected teams_removed to be present")
+	}
+	if len(*out.TeamsRemoved) != 2 {
+		t.Errorf("expected 2 teams removed, got %d", len(*out.TeamsRemoved))
+	}
+	if out.TeamSummary == nil {
+		t.Fatal("expected team_summary to be present")
+	}
+	if out.TeamSummary.TotalTeams != 3 {
+		t.Errorf("expected total_teams=3, got %d", out.TeamSummary.TotalTeams)
+	}
+	if out.TeamSummary.TeamsRemoved != 2 {
+		t.Errorf("expected teams_removed=2, got %d", out.TeamSummary.TeamsRemoved)
+	}
+	if out.TeamSummary.TeamsRetained != 1 {
+		t.Errorf("expected teams_retained=1, got %d", out.TeamSummary.TeamsRetained)
+	}
+}
+
+func TestWriteJSON_RestrictToTeam_TeamErrors(t *testing.T) {
+	var buf bytes.Buffer
+	result := sampleRestrictResult()
+	result.TeamErrors = []TeamAction{
+		{TeamName: "acme-sales", TeamID: "team-id-002", Action: "removed", Status: "error", Error: "permission denied"},
+	}
+	result.TeamRemovalErrors = 1
+	writeJSON(&buf, result)
+
+	var out jsonOutput
+	if err := json.Unmarshal(buf.Bytes(), &out); err != nil {
+		t.Fatalf("failed to parse JSON: %v", err)
+	}
+	if out.TeamErrors == nil {
+		t.Fatal("expected team_errors to be present")
+	}
+	if len(*out.TeamErrors) != 1 {
+		t.Fatalf("expected 1 team error, got %d", len(*out.TeamErrors))
+	}
+	if (*out.TeamErrors)[0].TeamName != "acme-sales" {
+		t.Errorf("expected team error for acme-sales, got %q", (*out.TeamErrors)[0].TeamName)
+	}
+	if (*out.TeamErrors)[0].Error != "permission denied" {
+		t.Errorf("expected error 'permission denied', got %q", (*out.TeamErrors)[0].Error)
+	}
+}
+
+func TestWriteJSON_RestrictToTeam_EmptyArrays(t *testing.T) {
+	var buf bytes.Buffer
+	result := sampleRestrictResult()
+	result.TeamActions = nil
+	result.TeamErrors = nil
+	result.Actions = nil
+	result.Errors = nil
+	writeJSON(&buf, result)
+
+	raw := buf.String()
+	// Team arrays should be [] not null
+	if strings.Contains(raw, `"teams_removed": null`) {
+		t.Error("teams_removed should be [] not null")
+	}
+	if strings.Contains(raw, `"team_errors": null`) {
+		t.Error("team_errors should be [] not null")
+	}
+	if strings.Contains(raw, `"channels_removed": null`) {
+		t.Error("channels_removed should be [] not null")
+	}
+	if strings.Contains(raw, `"errors": null`) {
+		t.Error("errors should be [] not null")
+	}
+}

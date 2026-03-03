@@ -22,6 +22,8 @@ type MattermostClient interface {
 	GetChannelMembersWithTeamData(userID string, page, perPage int) ([]model.ChannelMemberWithTeamData, error)
 	RemoveUserFromChannel(channelID, userID string) error
 	GetChannel(channelID string) (*model.Channel, error)
+	GetTeamsForUser(userID string) ([]*model.Team, error)
+	RemoveUserFromTeam(teamID, userID string) error
 	GetConfig() (*model.Config, error)
 }
 
@@ -100,6 +102,22 @@ func (c *apiClient) GetChannel(channelID string) (*model.Channel, error) {
 		return nil, wrapAPIError(resp, err, fmt.Sprintf("channel %s", channelID))
 	}
 	return channel, nil
+}
+
+func (c *apiClient) GetTeamsForUser(userID string) ([]*model.Team, error) {
+	teams, resp, err := c.api.GetTeamsForUser(context.Background(), userID, "")
+	if err != nil {
+		return nil, wrapAPIError(resp, err, fmt.Sprintf("teams for user %s", userID))
+	}
+	return teams, nil
+}
+
+func (c *apiClient) RemoveUserFromTeam(teamID, userID string) error {
+	resp, err := c.api.RemoveTeamMember(context.Background(), teamID, userID)
+	if err != nil {
+		return wrapAPIError(resp, err, fmt.Sprintf("removing user from team %s", teamID))
+	}
+	return nil
 }
 
 func (c *apiClient) GetConfig() (*model.Config, error) {

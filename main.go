@@ -19,6 +19,7 @@ func main() {
 		teamFlag        string
 		channelFlag     string
 		keepAllChannels bool
+		restrictToTeam  bool
 		dryRun          bool
 		workers         int
 		format          string
@@ -57,6 +58,9 @@ IMPORTANT: --team and --channel require the internal name, NOT the display name.
 			// Validate required flags
 			if targetUser == "" {
 				return fmt.Errorf("--username-target (-u) is required")
+			}
+			if restrictToTeam && keepAllChannels {
+				return fmt.Errorf("--restrict-to-team cannot be used with --keep-all-channels")
 			}
 			if keepAllChannels {
 				if teamFlag != "" || channelFlag != "" {
@@ -138,6 +142,7 @@ IMPORTANT: --team and --channel require the internal name, NOT the display name.
 				TeamName:        teamFlag,
 				ChannelName:     channelFlag,
 				KeepAllChannels: keepAllChannels,
+				RestrictToTeam:  restrictToTeam,
 				DryRun:          dryRun,
 				Workers:         workers,
 				Verbose:         verbose,
@@ -182,6 +187,7 @@ IMPORTANT: --team and --channel require the internal name, NOT the display name.
 
 	// Optional flags
 	rootCmd.Flags().BoolVar(&keepAllChannels, "keep-all-channels", false, "Only demote the user to guest; do not remove any channel memberships")
+	rootCmd.Flags().BoolVar(&restrictToTeam, "restrict-to-team", false, "Remove user from all teams except the target team, then clean up channels")
 	rootCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview all actions without making any changes")
 	rootCmd.Flags().IntVar(&workers, "workers", 10, "Number of concurrent workers for channel removal")
 	rootCmd.Flags().StringVar(&format, "format", "table", "Output format: table, csv, json")

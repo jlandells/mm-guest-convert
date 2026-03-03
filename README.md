@@ -151,6 +151,7 @@ mm-guest-convert [flags]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--keep-all-channels` | `false` | Only demote the user to guest; do not remove any channel memberships (mutually exclusive with `--team` and `--channel`) |
+| `--restrict-to-team` | `false` | Remove user from all teams except the target team, then clean up channels (mutually exclusive with `--keep-all-channels`) |
 | `--dry-run` | `false` | Preview all actions without making any changes |
 | `--workers` | `10` | Number of concurrent workers for channel removal |
 | `--format` | `table` | Output format: `table`, `csv`, `json` |
@@ -205,6 +206,20 @@ mm-guest-convert --url https://mattermost.example.com --token YOUR_TOKEN \
 This is useful when you want to restrict a user's role without changing their channel access.
 The `--team` and `--channel` flags are not required (and cannot be used) with
 `--keep-all-channels`.
+
+### Restrict to a Single Team
+
+Demote the user to guest, remove them from all teams except the target team, and restrict their
+channel access to a single channel:
+
+```bash
+mm-guest-convert --url https://mattermost.example.com --token YOUR_TOKEN \
+  -u jsmith -t acme-corp -c project-alpha --restrict-to-team
+```
+
+This is useful when a user belongs to multiple teams and you want to fully isolate them to a
+single team and channel in one command. Removing a team membership implicitly removes all of
+that team's channel memberships, so this approach is more efficient on large instances.
 
 ### Writing Output to a File
 
@@ -307,9 +322,9 @@ Structured output for scripting and automation:
   the number of concurrent removal operations (default: 10). Increase it for faster processing
   on instances that can handle higher API concurrency, or decrease it if you encounter rate
   limiting.
-- **Team memberships are not modified.** The tool only manages channel memberships. The user
-  will remain a member of any teams they were previously on. This is by design — team membership
-  alone does not grant channel access for guests.
+- **Team memberships are not modified by default.** Without `--restrict-to-team`, the tool only
+  manages channel memberships. The user will remain a member of any teams they were previously
+  on. Use `--restrict-to-team` to also remove the user from all teams except the target team.
 - **DM and GM channels are excluded.** Direct Message and Group Message channels are silently
   skipped and never included in any removal operation.
 
