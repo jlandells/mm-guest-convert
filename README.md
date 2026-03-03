@@ -24,12 +24,13 @@ or restricting partner access.
 Download the pre-built binary for your platform from the
 [Releases](https://github.com/jlandells/mm-guest-convert/releases) page.
 
-| Platform      | Filename                             |
-|---------------|--------------------------------------|
-| Linux (amd64) | `mm-guest-convert-linux-amd64`       |
-| macOS (Intel) | `mm-guest-convert-darwin-amd64`      |
-| macOS (Apple) | `mm-guest-convert-darwin-arm64`      |
-| Windows       | `mm-guest-convert-windows-amd64.exe` |
+| Platform            | Filename                            |
+|---------------------|-------------------------------------|
+| Linux (amd64)       | `mm-guest-convert_linux_amd64`      |
+| Linux (arm64)       | `mm-guest-convert_linux_arm64`      |
+| macOS (Apple)       | `mm-guest-convert_macos_apple`      |
+| macOS (Intel)       | `mm-guest-convert_macos_intel`      |
+| Windows             | `mm-guest-convert_windows.exe`      |
 
 On Linux and macOS, make the binary executable after downloading:
 

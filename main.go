@@ -8,7 +8,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var version = "dev"
+var Version = "dev"
 
 func main() {
 	var (
@@ -50,7 +50,7 @@ IMPORTANT: --team and --channel require the internal name, NOT the display name.
     https://mattermost.example.com/engineering-team/channels/project-alpha
                                                              ^^^^^^^^^^^^^
     Or: System Console → User Management → Channels → select channel → Channel URL field.`,
-		Version: version,
+		Version:       Version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -148,7 +148,7 @@ IMPORTANT: --team and --channel require the internal name, NOT the display name.
 
 			// Output result even if there was a partial failure
 			if result != nil {
-				exitCode := WriteOutput(result, format, outputPath, version)
+				exitCode := WriteOutput(result, format, outputPath, Version)
 				if exitCode != ExitSuccess {
 					os.Exit(exitCode)
 				}
