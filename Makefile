@@ -19,11 +19,11 @@ build-all: pre-build-check fmt imports staticcheck vet
 # Code quality checks
 fmt:
 	@echo "Running gofmt..."
-	@gofmt -d -e -s . 2>&1 | read; if [ $$? -eq 0 ]; then echo "Code is not formatted, please run 'gofmt -w .'" && exit 1; fi
+	@gofmt -w -s .
 
 imports:
 	@echo "Running goimports..."
-	@goimports -l . 2>&1 | read; if [ $$? -eq 0 ]; then echo "Imports are not properly organized, please run 'goimports -w .'" && exit 1; fi
+	@goimports -w .
 
 staticcheck:
 	@echo "Running staticcheck..."
